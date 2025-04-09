@@ -1,6 +1,7 @@
 import * as THREE from "three";
 import { OrbitControls } from "jsm/controls/OrbitControls.js";
 import getStarfield from "./src/getStarfield.js";
+import countries from './src/countriesLatLng.js';
 
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(45, innerWidth / innerHeight, 0.1, 1000);
@@ -9,6 +10,21 @@ const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setSize(innerWidth, innerHeight);
 renderer.setPixelRatio(window.devicePixelRatio);
 document.body.appendChild(renderer.domElement);
+
+const popup = document.createElement("div");
+popup.id = "hoverPopup";
+popup.style.position = "absolute";
+popup.style.top = "10px";
+popup.style.left = "10px";
+popup.style.background = "rgba(0,0,0,0.7)";
+popup.style.color = "white";
+popup.style.padding = "8px 12px";
+popup.style.borderRadius = "6px";
+popup.style.fontFamily = "sans-serif";
+popup.style.pointerEvents = "none";
+popup.style.display = "none";
+popup.style.zIndex = 10;
+document.body.appendChild(popup);
 
 const orbitCtrl = new OrbitControls(camera, renderer.domElement);
 orbitCtrl.enableDamping = true;
@@ -70,7 +86,6 @@ const vertexShader = `
     gl_Position = projectionMatrix * mvPosition;
   }
 `;
-
 const fragmentShader = `
   uniform sampler2D colorTexture;
   uniform sampler2D alphaTexture;
@@ -92,7 +107,6 @@ const fragmentShader = `
     gl_FragColor = vec4(color, alpha);
   }
 `;
-
 const uniforms = {
   size: { type: "f", value: 4.0 },
   colorTexture: { type: "t", value: colorMap },
@@ -101,7 +115,6 @@ const uniforms = {
   alphaTexture: { type: "t", value: alphaMap },
   mouseUV: { type: "v2", value: new THREE.Vector2(0.0, 0.0) },
 };
-
 const pointsMat = new THREE.ShaderMaterial({
   uniforms: uniforms,
   vertexShader,
@@ -115,95 +128,82 @@ globeGroup.add(points);
 const hemiLight = new THREE.HemisphereLight(0xffffff, 0x080820, 3);
 scene.add(hemiLight);
 
-const stars = getStarfield({ numStars: 4500, sprite: starSprite });
+const stars = getStarfield({ numStars:4500, sprite: starSprite });
 scene.add(stars);
 
-// Popup setup
-const popup = document.createElement('div');
-popup.style.cssText = `
-  position: absolute;
-  display: none;
-  background: rgba(255,255,255,0.95);
-  padding: 8px 12px;
-  border-radius: 8px;
-  font-family: sans-serif;
-  font-size: 14px;
-  color: #000;
-  box-shadow: 0 4px 12px rgba(0,0,0,0.3);
-  pointer-events: none;
-  z-index: 999;
-`;
-document.body.appendChild(popup);
-
-let lastMouseEvent = { clientX: 0, clientY: 0 };
-let lastFetch = 0;
-
-function cartesianToLatLon(pos) {
-  const radius = 1;
-  const lat = 90 - (Math.acos(pos.y / radius)) * 180 / Math.PI;
-  const lon = ((270 + Math.atan2(pos.x, pos.z) * 180 / Math.PI) % 360) - 180;
+function uvToLatLng(uv) {
+  const lon = uv.x * 360 - 180;
+  const lat = 90 - uv.y * 180;
   return { lat, lon };
 }
 
-window.addEventListener('mousemove', (evt) => {
-  pointerPos.set(
-    (evt.clientX / window.innerWidth) * 2 - 1,
-    -(evt.clientY / window.innerHeight) * 2 + 1
-  );
-  lastMouseEvent = evt;
-});
-
-function handleRaycast() {
-  raycaster.setFromCamera(pointerPos, camera);
-  const intersects = raycaster.intersectObject(globe);
-  if (intersects.length > 0) {
-    globeUV.copy(intersects[0].uv);
-    uniforms.mouseUV.value = globeUV;
-    const point = intersects[0].point;
-    const { lat, lon } = cartesianToLatLon(point);
-
-    if (Date.now() - lastFetch > 1500) {
-      lastFetch = Date.now();
-      fetchLocationDetails(lat, lon, lastMouseEvent.clientX, lastMouseEvent.clientY);
-    }
-  } else {
-    popup.style.display = 'none';
+function getTimezoneInfo(lat, lon) {
+  try {
+    const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    const time = new Date().toLocaleString("en-US", {
+      timeZone: timeZone,
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: true
+    });
+    return { timeZone, time };
+  } catch {
+    return { timeZone: "Unknown", time: "Unknown" };
   }
 }
 
-async function fetchLocationDetails(lat, lon, x, y) {
-  try {
-    const geoRes = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}`);
-    const geoData = await geoRes.json();
-    const country = geoData.address?.country || "Unknown";
-    const timezone = geoData.address?.timezone || geoData?.timezone || "Etc/UTC";
+function getCountryName(lat, lon) {
+  for (let country of countries) {
+    if (
+      lat >= country.latMin && lat <= country.latMax &&
+      lon >= country.lonMin && lon <= country.lonMax
+    ) {
+      return country.name;
+    }
+  }
+  return "Unknown";
+}
 
-    const timeRes = await fetch(`https://worldtimeapi.org/api/timezone/${timezone}`);
-    const timeData = await timeRes.json();
-    const datetime = timeData.datetime ? new Date(timeData.datetime).toLocaleTimeString() : "N/A";
+function handleRaycast(evt) {
+  raycaster.setFromCamera(pointerPos, camera);
+  const intersects = raycaster.intersectObjects([globe], false);
+  if (intersects.length > 0) {
+    const uv = intersects[0].uv;
+    globeUV.copy(uv);
+    uniforms.mouseUV.value = globeUV;
+
+    const { lat, lon } = uvToLatLng(uv);
+    const country = getCountryName(lat, lon);
+    const { timeZone, time } = getTimezoneInfo(lat, lon);
 
     popup.innerHTML = `
       <strong>${country}</strong><br>
-      Timezone: ${timezone}<br>
-      Time: ${datetime}
+      Timezone: ${timeZone}<br>
+      Local Time: ${time}
     `;
-    popup.style.display = 'block';
-    popup.style.left = x + 15 + 'px';
-    popup.style.top = y + 15 + 'px';
-  } catch (err) {
-    popup.style.display = 'none';
+    popup.style.left = evt.clientX + 15 + "px";
+    popup.style.top = evt.clientY + 15 + "px";
+    popup.style.display = "block";
+  } else {
+    popup.style.display = "none";
   }
 }
 
 function animate() {
   renderer.render(scene, camera);
   globeGroup.rotation.y += 0.002;
-  handleRaycast();
   requestAnimationFrame(animate);
   orbitCtrl.update();
-}
-
+};
 animate();
+
+window.addEventListener('mousemove', (evt) => {
+  pointerPos.set(
+    (evt.clientX / window.innerWidth) * 2 - 1,
+    -(evt.clientY / window.innerHeight) * 2 + 1
+  );
+  handleRaycast(evt);
+});
 
 window.addEventListener('resize', function () {
   camera.aspect = window.innerWidth / window.innerHeight;
