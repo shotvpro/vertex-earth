@@ -210,3 +210,78 @@ window.addEventListener('resize', function () {
   camera.updateProjectionMatrix();
   renderer.setSize(window.innerWidth, window.innerHeight);
 }, false);
+
+// 1. Create the popup element
+const popup = document.createElement('div');
+popup.style.position = 'absolute';
+popup.style.background = 'rgba(0,0,0,0.7)';
+popup.style.color = 'white';
+popup.style.padding = '8px 12px';
+popup.style.borderRadius = '8px';
+popup.style.pointerEvents = 'none';
+popup.style.display = 'none';
+popup.style.zIndex = 999;
+popup.style.fontSize = '14px';
+document.body.appendChild(popup);
+
+// 2. Convert UV to lat/lon
+function uvToLatLon(uv) {
+  const lon = uv.x * 360 - 180;
+  const lat = 90 - uv.y * 180;
+  return { lat, lon };
+}
+
+// 3. Estimate timezone offset
+function getTimezoneOffset(lon) {
+  const offset = Math.round(lon / 15); // crude estimation
+  return offset;
+}
+
+// 4. Format time
+function formatTime(offset) {
+  const now = new Date();
+  const utc = now.getTime() + now.getTimezoneOffset() * 60000;
+  const local = new Date(utc + offset * 3600000);
+  return local.toLocaleTimeString();
+}
+
+// 5. Get rough country from lat/lon (very simple bounding box match)
+function getCountry(lat, lon) {
+  if (lat > 23 && lat < 49 && lon > 68 && lon < 97) return "India";
+  if (lat > 35 && lat < 71 && lon > -10 && lon < 40) return "Europe";
+  if (lat > 24 && lat < 49 && lon > -125 && lon < -66) return "USA";
+  if (lat > -35 && lat < -10 && lon > 110 && lon < 155) return "Australia";
+  return "Unknown";
+}
+
+// 6. Update popup on mousemove
+window.addEventListener('mousemove', (evt) => {
+  pointerPos.set(
+    (evt.clientX / window.innerWidth) * 2 - 1,
+    -(evt.clientY / window.innerHeight) * 2 + 1
+  );
+
+  raycaster.setFromCamera(pointerPos, camera);
+  const intersects = raycaster.intersectObject(globe);
+  if (intersects.length > 0 && intersects[0].uv) {
+    globeUV.copy(intersects[0].uv);
+    uniforms.mouseUV.value = globeUV;
+
+    const { lat, lon } = uvToLatLon(globeUV);
+    const offset = getTimezoneOffset(lon);
+    const time = formatTime(offset);
+    const country = getCountry(lat, lon);
+
+    popup.style.display = 'block';
+    popup.style.left = `${evt.clientX + 10}px`;
+    popup.style.top = `${evt.clientY + 10}px`;
+    popup.innerHTML = `
+      <strong>${country}</strong><br/>
+      Lat: ${lat.toFixed(2)}°, Lon: ${lon.toFixed(2)}°<br/>
+      Timezone: UTC${offset >= 0 ? '+' : ''}${offset}<br/>
+      Local Time: ${time}
+    `;
+  } else {
+    popup.style.display = 'none';
+  }
+});
